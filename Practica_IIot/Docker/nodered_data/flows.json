@@ -1,0 +1,289 @@
+[
+    {
+        "id": "7bbb9254c033f421",
+        "type": "tab",
+        "label": "Flujo 1",
+        "disabled": false,
+        "info": "",
+        "env": []
+    },
+    {
+        "id": "mqtt_in_receipt",
+        "type": "mqtt in",
+        "z": "7bbb9254c033f421",
+        "name": "MQTT - Clase/Iot/Cmos/#",
+        "topic": "Clase/Iot/Cmos/#",
+        "qos": "0",
+        "datatype": "auto-detect",
+        "broker": "mqtt_broker",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 120,
+        "wires": [
+            [
+                "func_extract_code"
+            ]
+        ]
+    },
+    {
+        "id": "func_extract_code",
+        "type": "function",
+        "z": "7bbb9254c033f421",
+        "name": "Extraer código y preparar payload",
+        "func": "// topic ejemplo: Clase/Iot/Cmos/2171518/data\nvar parts = msg.topic.split(\"/\");\nvar codigo = parts[3]; // extraer código del sensor\n\n// 1️⃣ Ignorar mensajes sin código válido\nif (!codigo) return null;\n\n// 2️⃣ Extraer datos del payload\nvar temperatura = (msg.payload.temperatura !== undefined) ? msg.payload.temperatura : null;\nvar humedad = (msg.payload.humedad !== undefined) ? msg.payload.humedad : null;\nvar buzzer = (msg.payload.buzzer !== undefined) ? msg.payload.buzzer : 0;\n\n// 3️⃣ Ignorar sensores vacíos\nif (temperatura === null && humedad === null) return null;\n\n// 4️⃣ Preparar mensajes individuales para gauges\nvar msgTemp = { topic: \"Temperatura\", payload: temperatura, codigo: codigo };\nvar msgHum = { topic: \"Humedad\", payload: humedad, codigo: codigo };\nvar msgBuzz = { topic: \"Buzzer\", payload: buzzer, codigo: codigo };\n\n// 5️⃣ Actualizar tabla de todos los sensores\nvar allData = flow.get('allData') || {};\n\n// Eliminar cualquier sensor inválido que quede en allData\nfor (var key in allData) {\n    if (!allData[key] || (allData[key].temperatura === undefined && allData[key].humedad === undefined)) {\n        delete allData[key];\n    }\n}\n\n// Guardar solo sensores válidos\nallData[codigo] = {\n    temperatura: temperatura,\n    humedad: humedad,\n    buzzer: buzzer\n};\n\n// Guardar nuevamente en flow\nflow.set('allData', allData);\n\n// Mensaje para la tabla\nvar msgTable = { topic: \"Todos los sensores\", payload: allData };\n\n// 6️⃣ Retornar los mensajes en paralelo\nreturn [msgTemp, msgHum, msgBuzz, msgTable];\n",
+        "outputs": 4,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 320,
+        "y": 240,
+        "wires": [
+            [
+                "gauge_temp"
+            ],
+            [
+                "gauge_hum"
+            ],
+            [],
+            [
+                "debug_out",
+                "func_store_all"
+            ]
+        ]
+    },
+    {
+        "id": "gauge_temp",
+        "type": "ui_gauge",
+        "z": "7bbb9254c033f421",
+        "name": "Temperatura",
+        "group": "ui_group_main",
+        "order": 1,
+        "width": 0,
+        "height": 0,
+        "gtype": "gage",
+        "title": "Temp - {{msg.codigo}}",
+        "label": "°C",
+        "format": "{{value}}",
+        "min": 0,
+        "max": "50",
+        "colors": [
+            "#00b500",
+            "#e6e600",
+            "#ca3838"
+        ],
+        "seg1": "",
+        "seg2": "",
+        "diff": false,
+        "className": "",
+        "x": 670,
+        "y": 80,
+        "wires": []
+    },
+    {
+        "id": "gauge_hum",
+        "type": "ui_gauge",
+        "z": "7bbb9254c033f421",
+        "name": "Humedad",
+        "group": "ui_group_main",
+        "order": 2,
+        "width": 0,
+        "height": 0,
+        "gtype": "gage",
+        "title": "Hum - {{msg.codigo}}",
+        "label": "%",
+        "format": "{{value}}",
+        "min": 0,
+        "max": "100",
+        "colors": [
+            "#00b500",
+            "#e6e600",
+            "#ca3838"
+        ],
+        "seg1": "",
+        "seg2": "",
+        "diff": false,
+        "className": "",
+        "x": 680,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "debug_out",
+        "type": "debug",
+        "z": "7bbb9254c033f421",
+        "name": "Output completo",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "complete": "payload",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 580,
+        "y": 400,
+        "wires": []
+    },
+    {
+        "id": "071021f521190f9a",
+        "type": "ui_switch",
+        "z": "7bbb9254c033f421",
+        "name": "",
+        "label": "Buzzer",
+        "tooltip": "",
+        "group": "ui_group_main",
+        "order": 3,
+        "width": 0,
+        "height": 0,
+        "passthru": true,
+        "decouple": "false",
+        "topic": "Buzzer",
+        "topicType": "msg",
+        "style": "",
+        "onvalue": "1",
+        "onvalueType": "num",
+        "onicon": "",
+        "oncolor": "",
+        "offvalue": "0",
+        "offvalueType": "num",
+        "officon": "",
+        "offcolor": "",
+        "animate": false,
+        "className": "",
+        "x": 380,
+        "y": 560,
+        "wires": [
+            [
+                "a241c1517b5edc20"
+            ]
+        ]
+    },
+    {
+        "id": "a241c1517b5edc20",
+        "type": "mqtt out",
+        "z": "7bbb9254c033f421",
+        "name": "buzzer",
+        "topic": "Clase/Iot/Cmos/2171518/buzzer",
+        "qos": "",
+        "retain": "",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "mqtt_broker",
+        "x": 590,
+        "y": 560,
+        "wires": []
+    },
+    {
+        "id": "func_store_all",
+        "type": "function",
+        "z": "7bbb9254c033f421",
+        "name": "Almacenar datos de todos sensores",
+        "func": "// Mantener estado global de todos los sensores\nvar allData = flow.get('allData') || {};\n\n// Actualizar con los nuevos datos (incluyendo buzzer)\nallData[msg.payload.codigo] = {\n    temperatura: msg.payload.temperatura,\n    humedad: msg.payload.humedad,\n    buzzer: msg.payload.buzzer\n};\n\n// Guardar de nuevo\nflow.set('allData', allData);\n\n// Enviar todo el estado para mostrar en tabla\nmsg.payload = allData;\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 700,
+        "y": 280,
+        "wires": [
+            [
+                "ui_template_table"
+            ]
+        ]
+    },
+    {
+        "id": "ui_template_table",
+        "type": "ui_template",
+        "z": "7bbb9254c033f421",
+        "group": "ui_group_main",
+        "name": "Tabla datos sensores",
+        "order": 3,
+        "width": 0,
+        "height": 0,
+        "format": "<div>\n  <h3>Datos de estudiantes</h3>\n  <table border=\"1\" style=\"width:100%;text-align:center;\">\n    <thead>\n      <tr>\n        <th>Código</th>\n        <th>Temperatura (°C)</th>\n        <th>Humedad (%)</th>\n      </tr>\n    </thead>\n    <tbody>\n      <tr ng-repeat=\"(codigo, datos) in msg.payload\">\n        <td>{{codigo}}</td>\n        <td>{{datos.temperatura}}</td>\n        <td>{{datos.humedad}}</td>\n      </tr>\n    </tbody>\n  </table>\n</div>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": true,
+        "templateScope": "local",
+        "x": 880,
+        "y": 400,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "mqtt_broker",
+        "type": "mqtt-broker",
+        "name": "HiveMQ Broker",
+        "broker": "156ffaebf08c44bd8b8184e06f2fd14f.s1.eu.hivemq.cloud",
+        "port": "8883",
+        "tls": "8c2357abc5ae1641",
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": true,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "ui_group_main",
+        "type": "ui_group",
+        "name": "Datos Sensores",
+        "tab": "ui_tab_main",
+        "order": 1,
+        "disp": true,
+        "width": 6,
+        "collapse": false
+    },
+    {
+        "id": "8c2357abc5ae1641",
+        "type": "tls-config",
+        "name": "",
+        "cert": "",
+        "key": "",
+        "ca": "",
+        "certname": "",
+        "keyname": "",
+        "caname": "",
+        "servername": "",
+        "verifyservercert": true,
+        "alpnprotocol": ""
+    },
+    {
+        "id": "ui_tab_main",
+        "type": "ui_tab",
+        "name": "IoT Dashboard",
+        "icon": "dashboard",
+        "order": 1
+    },
+    {
+        "id": "06012e7ffa457d4b",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-dashboard": "3.6.6"
+        }
+    }
+]

@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  node-red:
+    build:
+      context: ./node-red
+    container_name: node-red
+    ports:
+      - "1880:1880"
+    volumes:
+      - ./nodered_data:/data
+    networks:
+      - mynetwork
+
+networks:
+  mynetwork:
+    driver: bridge

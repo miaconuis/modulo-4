@@ -1,0 +1,222 @@
+#include <WiFi.h>
+#include <esp_now.h>
+#include "esp_wifi.h"
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+
+// ==== WiFi y MQTT ====
+const char* ssid = ""; // LLENAR Clave wifi
+const char* password = ""; // LLENAR Contraseña wifi
+
+const char* mqtt_server   = "2dca1659b4da46cfbbd6246c00ba2374.s1.eu.hivemq.cloud";
+const int   mqtt_port     = 8883;
+const char* mqtt_user     = "admin";
+const char* mqtt_pass     = "Admin1234+";
+const char* mqtt_client_id = "ESP32_MAESTRO_MIACON";
+
+WiFiClientSecure espClient;
+PubSubClient client(espClient);
+
+
+// ==== MAC del Esclavo ====
+uint8_t slaveAddress[] = {0xCC, 0xDB, 0xA7, 0x3F, 0x58, 0xB8};
+
+// ==== Estructura de datos ====
+typedef struct struct_message {
+  float temperature;
+  float humidity;
+  uint8_t buzzerState;
+} struct_message;
+
+struct_message incomingData;
+uint8_t buzzerCommand = 0;
+
+// ==== Estado ====
+bool channelSynced = false;       // Confirmación del esclavo
+bool slaveConnected = false;      // Conexión activa del esclavo
+unsigned long lastSlaveMsg = 0;   // Último mensaje recibido del esclavo
+const unsigned long slaveTimeout = 10000;  // 10s sin datos = esclavo desconectado
+unsigned long lastChannelSent = 0; // Última vez que enviamos el canal
+const unsigned long channelRetry = 3000;  // Reenvío de canal cada 3s si no hay confirmación
+uint8_t currentChannel = 1; 
+
+// ==== Topics MQTT ====
+const char* TOPIC_SENSOR = "Clase/Iot/Cmos/sensor";
+const char* TOPIC_BUZZER = "Clase/Iot/Cmos/buzzer";
+const char* TOPIC_STATUS = "Clase/Iot/Cmos/status";
+// ==== MQTT ====
+void reconnectMQTT() {
+  if (client.connected()) return;
+  if (client.connect(mqtt_client_id, mqtt_user, mqtt_pass)) {
+    Serial.println("✅ Conectado a broker MQTT");
+    client.subscribe(TOPIC_BUZZER);
+  }
+}
+void publishStatus(const char* status) {
+  if (client.connected()) client.publish(TOPIC_STATUS, status);
+  Serial.printf("📡 Estado del esclavo -> %s\n", status);
+}
+// ==== Callback MQTT ====
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  if (String(topic) == TOPIC_BUZZER) {
+    uint8_t val = 0;
+    if (length == 1) val = payload[0];
+    else val = atoi((char*)payload);
+
+    buzzerCommand = (val != 0) ? 1 : 0;
+
+    esp_err_t result = esp_now_send(slaveAddress, &buzzerCommand, sizeof(buzzerCommand));
+    if (result == ESP_OK)
+      Serial.printf("📤 Enviado al esclavo -> Buzzer %s\n", buzzerCommand ? "ON" : "OFF");
+    else
+      Serial.println("❌ Error enviando comando al esclavo");
+  }
+}
+
+// ==== Callback recepción ESP-NOW ====
+void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+    lastSlaveMsg = millis();
+    slaveConnected = true;
+
+    // Confirmación de canal
+    if (len == 1 && data[0] == 200) {
+        channelSynced = true;
+        Serial.println("✅ Esclavo confirmó sincronización de canal");
+        publishStatus("online");
+        return;
+    }
+
+    // Verificar que haya al menos 9 bytes
+    if (len >= 9) {
+        uint8_t buffer[9];
+        memcpy(buffer, data, 9);
+
+        float temp, hum;
+        uint8_t buz;
+        memcpy(&temp, buffer, 4);
+        memcpy(&hum, buffer+4, 4);
+        buz = buffer[8];
+
+        incomingData.temperature = temp;
+        incomingData.humidity = hum;
+        incomingData.buzzerState = buz;
+
+        Serial.printf("🌡️ T: %.1f°C | H: %.1f%% | B: %d | Canal: %d\n",
+                      temp, hum, buz, currentChannel);
+
+        if (!client.connected()) reconnectMQTT();
+        char payload[100];
+        snprintf(payload, sizeof(payload),
+                 "{\"temp\":%.1f,\"hum\":%.1f,\"buzzer\":%d}",
+                 temp, hum, buz);
+        client.publish(TOPIC_SENSOR, payload);
+
+    } else {
+        Serial.printf("⚠️ Datos recibidos con tamaño inesperado: %d bytes\n", len);
+        Serial.print("📦 Bytes: ");
+        for (int i=0;i<len;i++) Serial.printf("%02X ", data[i]);
+        Serial.println();
+    }
+}
+
+// ==== Callback envío ESP-NOW ====
+void OnDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  if (status == ESP_NOW_SEND_SUCCESS)
+    Serial.println("📤 Mensaje enviado correctamente");
+  else
+    Serial.println("❌ Error al enviar mensaje");
+}
+
+// ==== Enviar canal al esclavo ====
+void syncChannel() {
+  unsigned long now = millis();
+
+  // Solo reenvía si el canal no está sincronizado o pasó el intervalo
+  if (!channelSynced && now - lastChannelSent > channelRetry) {
+    esp_err_t result = esp_now_send(slaveAddress, &currentChannel, sizeof(currentChannel));
+    lastChannelSent = now;
+
+    if (result == ESP_OK)
+      Serial.printf("📤 Canal (%d) enviado al esclavo\n", currentChannel);
+    else
+      Serial.println("❌ Error enviando canal");
+  }
+}
+
+// ==== Forzar canal ESP-NOW ====
+void forceChannel(uint8_t newChannel) {
+    currentChannel = newChannel;
+    channelSynced = false; // Forzar reenvío
+    esp_now_del_peer(slaveAddress);
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, slaveAddress, 6);
+    peerInfo.channel = currentChannel;
+    peerInfo.ifidx = WIFI_IF_STA;
+    peerInfo.encrypt = false;
+    if (esp_now_add_peer(&peerInfo) == ESP_OK)
+        Serial.printf("✅ Peer forzado al canal %d\n", currentChannel);
+    else
+        Serial.println("❌ Error al forzar peer");
+}
+
+// ==== SETUP ====
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+  Serial.println("\n✅ WiFi conectado");
+  Serial.printf("📶 IP: %s | MAC: %s\n", WiFi.localIP().toString().c_str(), WiFi.macAddress().c_str());
+  currentChannel = WiFi.channel();
+  espClient.setInsecure();
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(mqttCallback);
+
+  if (esp_now_init() != ESP_OK) { Serial.println("❌ Error inicializando ESP-NOW"); ESP.restart(); }
+  esp_now_register_recv_cb(OnDataRecv);
+  esp_now_register_send_cb(OnDataSent);
+
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, slaveAddress, 6);
+  peerInfo.channel = currentChannel;
+  peerInfo.ifidx = WIFI_IF_STA;
+  peerInfo.encrypt = false;
+  esp_now_del_peer(slaveAddress);
+  esp_now_add_peer(&peerInfo);
+
+  // Primer envío de canal
+  syncChannel();
+
+  Serial.println("✅ Maestro listo (MQTT + ESP-NOW)");
+}
+
+// ==== LOOP ULTRA ROBUSTO ====
+void loop() {
+    unsigned long now = millis();
+
+    // ================= MQTT =================
+    client.loop();
+    if (!client.connected()) reconnectMQTT();
+
+    // ================= Estado del esclavo =================
+    if (slaveConnected && now - lastSlaveMsg > slaveTimeout) {
+        Serial.println("⚠️ El esclavo no responde, marcando offline...");
+        slaveConnected = false;
+        channelSynced = false;
+        publishStatus("offline");
+    }
+
+    // ================= Cambio de canal WiFi =================
+    int ch = WiFi.channel();
+    if (ch != currentChannel) {
+        Serial.printf("🔄 Cambio de canal WiFi detectado: %d → %d\n", currentChannel, ch);
+        forceChannel(ch); // forzar canal ESP-NOW al nuevo canal
+    }
+
+    // ================= Sincronización de canal =================
+    syncChannel();
+
+    delay(50); // loop rápido pero controlado
+}
+

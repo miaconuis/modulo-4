@@ -1,0 +1,199 @@
+#include <WiFi.h>
+#include <esp_now.h>
+#include "esp_wifi.h"
+#include "DHT.h"
+
+// ==== CONFIGURACIÓN DEL SENSOR Y BUZZER ====
+#define DHTPIN 4
+#define DHTTYPE DHT11
+#define BUZZER_PIN 23
+DHT dht(DHTPIN, DHTTYPE);
+
+// ==== MAC DEL MAESTRO ====
+uint8_t masterAddress[] = {0x0C, 0x8B, 0x95, 0x1F, 0x9E, 0xD4};
+
+// ==== ESTRUCTURA DE DATOS ====
+typedef struct __attribute__((packed)) {
+  float temperature;
+  float humidity;
+  uint8_t buzzerState;
+} struct_message;
+
+struct_message outgoingData;
+
+// ==== VARIABLES DE SINCRONIZACIÓN ====
+uint8_t ackCode = 200;        // ACK que confirma sincronización
+uint8_t currentChannel = 1;   // Canal inicial temporal
+bool channelSynced = false;
+unsigned long lastSend = 0;
+unsigned long lastSyncAttempt = 0;
+unsigned long lastChannelCheck = 0;
+
+const unsigned long sendInterval = 3000;  // cada 3 s envía datos
+const unsigned long syncTimeout   = 5000; // cada 5 s reintenta sincronizar
+const unsigned long channelCheckInterval = 2000; // cada 2 s revisar canal
+
+// ==== FUNCIONES AUXILIARES ====
+void printMAC() {
+  uint8_t mac[6];
+  esp_wifi_get_mac(WIFI_IF_STA, mac);
+  Serial.printf("📶 MAC del esclavo: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+// ==== CAMBIAR CANAL ====
+void cambiarCanal(uint8_t newChannel) {
+  if (newChannel != currentChannel) {
+    Serial.printf("🔄 Cambiando canal de %d → %d\n", currentChannel, newChannel);
+    currentChannel = newChannel;
+    esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
+    delay(50);
+
+    // Reconfigurar peer
+    esp_now_del_peer(masterAddress);
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, masterAddress, 6);
+    peerInfo.channel = currentChannel;
+    peerInfo.ifidx = WIFI_IF_STA;
+    peerInfo.encrypt = false;
+    esp_now_add_peer(&peerInfo);
+
+    Serial.printf("📡 Canal actualizado: %d\n", currentChannel);
+
+    // Enviar ACK al maestro
+    esp_err_t result = esp_now_send(masterAddress, &ackCode, sizeof(ackCode));
+    if (result == ESP_OK) Serial.println("✅ ACK de canal enviado");
+    else Serial.println("❌ Error enviando ACK");
+  }
+}
+
+// ==== CALLBACK RECEPCIÓN ====
+void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  // Canal del maestro
+  if (len == sizeof(uint8_t)) {
+    uint8_t newChannel = data[0];
+    if (!channelSynced || currentChannel != newChannel) {
+      Serial.printf("📡 Canal recibido del maestro: %d\n", newChannel);
+      cambiarCanal(newChannel);
+      channelSynced = true;
+    }
+    return;
+  }
+
+  // Comando buzzer
+  if (len == sizeof(uint8_t)) {
+    uint8_t buzzerCmd = data[0];
+    digitalWrite(BUZZER_PIN, buzzerCmd ? HIGH : LOW);
+    outgoingData.buzzerState = buzzerCmd;
+    Serial.printf("🔔 Buzzer %s\n", buzzerCmd ? "ON" : "OFF");
+  }
+}
+
+// ==== CALLBACK ENVÍO ====
+void OnDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  if (status == ESP_NOW_SEND_SUCCESS)
+    Serial.println("📤 Datos enviados correctamente");
+  else
+    Serial.println("❌ Error al enviar datos");
+}
+
+// ==== REINICIAR ESP-NOW ====
+void reiniciarESPNOW() {
+  Serial.println("♻️ Reiniciando ESP-NOW...");
+  esp_now_deinit();
+  delay(50);
+
+  if (esp_now_init() == ESP_OK) {
+    esp_now_register_recv_cb(OnDataRecv);
+    esp_now_register_send_cb(OnDataSent);
+
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, masterAddress, 6);
+    peerInfo.channel = currentChannel;
+    peerInfo.ifidx = WIFI_IF_STA;
+    peerInfo.encrypt = false;
+    esp_now_add_peer(&peerInfo);
+
+    Serial.printf("✅ ESP-NOW reconfigurado en canal %d\n", currentChannel);
+  } else {
+    Serial.println("❌ Error reiniciando ESP-NOW");
+  }
+}
+
+// ==== SETUP ====
+void setup() {
+  Serial.begin(115200);
+  Serial.println("🚀 Iniciando ESP32 Esclavo robusto");
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+  dht.begin();
+
+  WiFi.mode(WIFI_STA);
+  delay(50);
+  printMAC();
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("❌ Error inicializando ESP-NOW");
+    ESP.restart();
+  }
+
+  esp_now_register_recv_cb(OnDataRecv);
+  esp_now_register_send_cb(OnDataSent);
+
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, masterAddress, 6);
+  peerInfo.channel = currentChannel;
+  peerInfo.ifidx = WIFI_IF_STA;
+  peerInfo.encrypt = false;
+  esp_now_add_peer(&peerInfo);
+
+  Serial.println("✅ Esclavo listo, esperando sincronización...");
+  lastSyncAttempt = millis();
+}
+
+// ==== LOOP ====
+void loop() {
+  unsigned long now = millis();
+
+  // 🔁 Reintento de sincronización
+  if (!channelSynced && now - lastSyncAttempt > syncTimeout) {
+    Serial.println("⚠️ Sin canal confirmado, reintentando...");
+    reiniciarESPNOW();
+    lastSyncAttempt = now;
+  }
+
+  // 🔁 Enviar datos si está sincronizado
+  if (channelSynced && now - lastSend > sendInterval) {
+    lastSend = now;
+    outgoingData.temperature = dht.readTemperature();
+    outgoingData.humidity = dht.readHumidity();
+
+    if (isnan(outgoingData.temperature) || isnan(outgoingData.humidity)) {
+      Serial.println("⚠️ Error leyendo DHT11");
+      return;
+    }
+
+    esp_err_t result = esp_now_send(masterAddress, (uint8_t*)&outgoingData, sizeof(outgoingData));
+    if (result == ESP_OK) {
+      Serial.printf("📡 Enviando -> T: %.1f°C | H: %.1f%% | B: %d | Canal: %d\n",
+                    outgoingData.temperature, outgoingData.humidity,
+                    outgoingData.buzzerState, currentChannel);
+    } else {
+      Serial.println("❌ Error al enviar datos, forzando resync...");
+      channelSynced = false;
+    }
+  }
+
+  // 🔁 Detectar cambio de canal WiFi y forzar resync
+  if (now - lastChannelCheck > channelCheckInterval) {
+    lastChannelCheck = now;
+    int ch = WiFi.channel();
+    if (ch != currentChannel) {
+      Serial.printf("🔄 Cambio de canal WiFi detectado: %d → %d\n", currentChannel, ch);
+      channelSynced = false;  // Forzar resync
+    }
+  }
+
+  delay(50);
+}

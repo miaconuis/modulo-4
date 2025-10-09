@@ -1,0 +1,102 @@
+/*
+  📡 Comunicación Maestro-Esclavo con ESP32 usando ESP-NOW + ACK
+  --------------------------------------------------------------
+  🔧 Versión simulada MAESTRO (sin sensores reales)
+  ✅ Recibe datos simulados del esclavo
+  ✅ Envía confirmación ACK
+  ✅ Envía comandos ON/OFF para el buzzer
+*/
+
+#include <WiFi.h>
+#include <esp_now.h>
+#include "esp_wifi.h"
+
+// ==== MAC del Esclavo ====
+uint8_t slaveAddress[] = {0x24, 0x0A, 0xC4, 0xB2, 0xD5, 0x88};
+
+// ==== Estructura de datos ====
+typedef struct struct_message {
+  float temperature;
+  float humidity;
+  uint8_t buzzerState;
+} struct_message;
+
+struct_message incomingData;
+uint8_t buzzerCommand = 0;
+
+// ==== Callback: recibe datos del esclavo ====
+void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len == sizeof(incomingData)) {
+    memcpy(&incomingData, data, sizeof(incomingData));
+
+    Serial.println("📥 Datos recibidos del Esclavo:");
+    Serial.printf("   🌡️ Temp: %.1f°C\n", incomingData.temperature);
+    Serial.printf("   💧 Humedad: %.1f%%\n", incomingData.humidity);
+    Serial.printf("   🔔 Buzzer (en esclavo): %s\n", incomingData.buzzerState ? "ON" : "OFF");
+
+    // Enviar ACK
+    uint8_t ack = 1;
+    esp_now_send(slaveAddress, &ack, sizeof(ack));
+    Serial.println("✅ ACK enviado al esclavo");
+  }
+}
+
+// ==== Callback: confirmación de envío ====
+void OnDataSent(const wifi_tx_info_t *wifi_tx_info, esp_now_send_status_t status) {
+  if (status == ESP_NOW_SEND_SUCCESS)
+    Serial.println("📤 Mensaje enviado correctamente");
+  else
+    Serial.println("❌ Error al enviar mensaje");
+}
+
+// ==== Setup ====
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("🚀 Iniciando ESP32 Maestro (Simulación)...");
+
+  WiFi.mode(WIFI_STA);
+  int channel = 6;
+  esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("❌ Error inicializando ESP-NOW");
+    ESP.restart();
+  }
+
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, slaveAddress, 6);
+  peerInfo.channel = channel;
+  peerInfo.ifidx = WIFI_IF_STA;
+  peerInfo.encrypt = false;
+
+  esp_now_del_peer(slaveAddress);
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+    Serial.println("❌ Error al agregar peer esclavo");
+  }
+
+  esp_now_register_recv_cb(OnDataRecv);
+  esp_now_register_send_cb(OnDataSent);
+
+  Serial.println("✅ Maestro listo (modo simulación)");
+}
+
+// ==== Loop ====
+void loop() {
+  static unsigned long lastCommandTime = 0;
+  unsigned long currentTime = millis();
+
+  // Alternar buzzer cada 10 segundos
+  if (currentTime - lastCommandTime > 10000) {
+    lastCommandTime = currentTime;
+    buzzerCommand = !buzzerCommand;
+    esp_err_t result = esp_now_send(slaveAddress, &buzzerCommand, sizeof(buzzerCommand));
+
+    if (result == ESP_OK)
+      Serial.printf("📤 Comando enviado al esclavo -> Buzzer %s\n", buzzerCommand ? "ON" : "OFF");
+    else
+      Serial.println("❌ Error al enviar comando al esclavo");
+  }
+
+  delay(500);
+}

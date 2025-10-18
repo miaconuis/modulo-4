@@ -1,0 +1,194 @@
+[
+    {
+        "id": "8c6a9a5c27d9b7e3",
+        "type": "tab",
+        "label": "Flujo ESP32 → PostgreSQL",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "2198cf8f795a3ef4",
+        "type": "mqtt in",
+        "z": "8c6a9a5c27d9b7e3",
+        "name": "MQTT Lecturas",
+        "topic": "miacon/lecturas",
+        "qos": "2",
+        "datatype": "auto-detect",
+        "broker": "d4d7885fdd787129",
+        "nl": false,
+        "rap": true,
+        "inputs": 0,
+        "x": 80,
+        "y": 380,
+        "wires": [
+            [
+                "41a75f0fb26a5113"
+            ]
+        ]
+    },
+    {
+        "id": "41a75f0fb26a5113",
+        "type": "json",
+        "z": "8c6a9a5c27d9b7e3",
+        "name": "Convertir a JSON",
+        "property": "payload",
+        "action": "",
+        "pretty": false,
+        "x": 310,
+        "y": 380,
+        "wires": [
+            [
+                "357fe5092d05d21b",
+                "77736c6983630eed"
+            ]
+        ]
+    },
+    {
+        "id": "357fe5092d05d21b",
+        "type": "function",
+        "z": "8c6a9a5c27d9b7e3",
+        "name": "Construir SQL",
+        "func": "// Si el payload viene como texto, conviértelo a objeto\nif (typeof msg.payload === \"string\") {\n    try {\n        msg.payload = JSON.parse(msg.payload);\n    } catch (e) {\n        node.error(\"Error al parsear JSON: \" + e.message);\n        return null;\n    }\n}\n\nlet temperatura = msg.payload.temperatura;\nlet humedad = msg.payload.humedad;\n\nif (temperatura === undefined || humedad === undefined) {\n    node.warn(\"Datos no válidos: \" + JSON.stringify(msg.payload));\n    return null;\n}\n\nmsg.query = `\n    INSERT INTO lecturas (dispositivo, temperatura, humedad, fecha)\n    VALUES ('ESP32-DHT11', ${temperatura}, ${humedad}, NOW());\n`;\n\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 560,
+        "y": 380,
+        "wires": [
+            [
+                "b7ee7d16ae353b5d",
+                "6d12e858c3d15d4d"
+            ]
+        ]
+    },
+    {
+        "id": "6d12e858c3d15d4d",
+        "type": "postgresql",
+        "z": "8c6a9a5c27d9b7e3",
+        "name": "PostgreSQL Insert",
+        "query": "",
+        "postgreSQLConfig": "8d0d1b197e5ae3ac",
+        "split": false,
+        "rowsPerMsg": "",
+        "outputs": 1,
+        "x": 830,
+        "y": 380,
+        "wires": [
+            [
+                "8419a857dec775be"
+            ]
+        ]
+    },
+    {
+        "id": "77736c6983630eed",
+        "type": "debug",
+        "z": "8c6a9a5c27d9b7e3",
+        "name": "Debug Payload JSON",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 330,
+        "y": 440,
+        "wires": []
+    },
+    {
+        "id": "b7ee7d16ae353b5d",
+        "type": "debug",
+        "z": "8c6a9a5c27d9b7e3",
+        "name": "Debug SQL generado",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "query",
+        "targetType": "msg",
+        "x": 830,
+        "y": 440,
+        "wires": []
+    },
+    {
+        "id": "8419a857dec775be",
+        "type": "debug",
+        "z": "8c6a9a5c27d9b7e3",
+        "name": "Debug Resultado",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1070,
+        "y": 380,
+        "wires": []
+    },
+    {
+        "id": "d4d7885fdd787129",
+        "type": "mqtt-broker",
+        "name": "",
+        "broker": "mosquitto",
+        "port": 1883,
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "8d0d1b197e5ae3ac",
+        "type": "postgreSQLConfig",
+        "name": "postgres",
+        "host": "postgres",
+        "hostFieldType": "str",
+        "port": 5432,
+        "portFieldType": "num",
+        "database": "miacondb",
+        "databaseFieldType": "str",
+        "ssl": "false",
+        "sslFieldType": "bool",
+        "applicationName": "",
+        "applicationNameType": "str",
+        "max": 10,
+        "maxFieldType": "num",
+        "idle": 1000,
+        "idleFieldType": "num",
+        "connectionTimeout": 10000,
+        "connectionTimeoutFieldType": "num",
+        "user": "miacon",
+        "userFieldType": "str",
+        "password": "miaconpass",
+        "passwordFieldType": "str"
+    },
+    {
+        "id": "b2472007cd42fe6e",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-postgresql": "0.15.4"
+        }
+    }
+]

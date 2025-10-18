@@ -1,0 +1,83 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <DHT.h>
+
+// WiFi
+const char* ssid = "TU_RED_WIFI";       // ⚠️ CAMBIAR AQUÍ
+const char* password = "TU_CONTRASEÑA"; // ⚠️ CAMBIAR AQUÍ
+
+// MQTTx
+const char* mqtt_server = "192.168.1.32";   // IP de tu PC
+const int mqtt_port = 1883;
+const char* topic = "miacon/lecturas";
+
+// DHT11
+#define DHTPIN 4
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+
+  // Conectar WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Conectando a WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\n✅ WiFi conectado");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+
+  // Conectar MQTT
+  client.setServer(mqtt_server, mqtt_port);
+  while (!client.connected()) {
+    Serial.print("🔁 Conectando al broker MQTT...");
+    if (client.connect("ESP32-DHT11")) {
+      Serial.println("✅ Conectado!");
+    } else {
+      Serial.print("❌ Error rc=");
+      Serial.println(client.state());
+      delay(2000);
+    }
+  }
+}
+
+void loop() {
+  if (!client.connected()) {
+    while (!client.connected()) {
+      if (client.connect("ESP32-DHT11")) {
+        Serial.println("🔁 Reconectado al broker");
+      } else {
+        delay(2000);
+      }
+    }
+  }
+
+  client.loop();
+
+  // Leer sensor
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+
+  if (isnan(h) || isnan(t)) {
+    Serial.println("⚠️ Error al leer DHT11");
+    return;
+  }
+
+  // Crear JSON
+  char payload[100];
+  snprintf(payload, sizeof(payload), "{\"temperatura\":%.2f,\"humedad\":%.2f}", t, h);
+
+  // Publicar en MQTT
+  client.publish(topic, payload);
+  Serial.print("📤 Enviado: ");
+  Serial.println(payload);
+
+  delay(5000); // cada 5 segundos
+}
